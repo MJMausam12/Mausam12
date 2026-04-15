@@ -1,0 +1,3 @@
+Binance Trade Stream → Aggregator (1s candles) → WebSocket Broadcast → Frontend Chart
+                           ↓
+                    Placeholder AI → Alert DB → Alert Panel
