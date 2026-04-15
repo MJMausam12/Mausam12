@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BTC 1‑Sec Signals (Demo)</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 20px;
+            background: #131722;
+            color: #d1d4dc;
+        }
+        #chart-container {
+            width: 100%;
+            height: 500px;
+            background: #131722;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        #alerts-panel {
+            background: #1e222d;
+            border-radius: 8px;
+            padding: 15px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .alert-buy { color: #26a69a; }
+        .alert-sell { color: #ef5350; }
+        .alert-item {
+            padding: 8px;
+            border-bottom: 1px solid #2a2e39;
+            font-family: monospace;
+        }
+        .confidence-high { font-weight: bold; }
+        h3 { margin-top: 0; color: #d1d4dc; }
+        .status { margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <h2>⚡ BTC/USDT 1‑Second Candles & AI Alerts (Demo)</h2>
+    <div class="status" id="connection-status">Connecting...</div>
+    <div id="chart-container"></div>
+    <div id="alerts-panel">
+        <h3>📊 Recent Alerts (Confidence ≥ 70%)</h3>
+        <div id="alerts-list">Loading alerts...</div>
+    </div>
+
+    <!-- Lightweight Charts -->
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <script>
+        const statusEl = document.getElementById('connection-status');
+        const alertsListEl = document.getElementById('alerts-list');
+
+        // ---------- Chart Setup ----------
+        const chart = LightweightCharts.createChart(document.getElementById('chart-container'), {
+            width: document.getElementById('chart-container').clientWidth,
+            height: 500,
+            layout: {
+                background: { color: '#131722' },
+                textColor: '#d1d4dc',
+            },
+            grid: {
+                vertLines: { color: '#2a2e39' },
+                horzLines: { color: '#2a2e39' },
+            },
+            timeScale: {
+                timeVisible: true,
+                secondsVisible: true,
+                tickMarkFormatter: (time) => {
+                    const date = new Date(time * 1000);
+                    return date.toLocaleTimeString('en-US', { hour12: false });
+                },
+            },
+        });
+
+        const candleSeries = chart.addCandlestickSeries({
+            upColor: '#26a69a',
+            downColor: '#ef5350',
+            borderVisible: false,
+            wickUpColor: '#26a69a',
+            wickDownColor: '#ef5350',
+        });
+
+        // ---------- Load Initial History ----------
+        async function loadHistory() {
+            const resp = await fetch('/api/history');
+            const candles = await resp.json();
+            const chartData = candles.map(c => ({
+                time: c.time,
+                open: c.open,
+                high: c.high,
+                low: c.low,
+                close: c.close,
+            }));
+            if (chartData.length > 0) {
+                candleSeries.setData(chartData);
+                chart.timeScale().fitContent();
+            }
+        }
+
+        // ---------- Fetch and Display Alerts ----------
+        async function loadAlerts() {
+            const resp = await fetch('/api/alerts?limit=30');
+            const alerts = await resp.json();
+            renderAlerts(alerts);
+        }
+
+        function renderAlerts(alerts) {
+            if (!alerts.length) {
+                alertsListEl.innerHTML = '<div class="alert-item">No alerts yet.</div>';
+                return;
+            }
+            alertsListEl.innerHTML = alerts.map(a => {
+                const dt = new Date(a.timestamp).toLocaleTimeString('en-US', { hour12: false });
+                const cls = a.signal === 'BUY' ? 'alert-buy' : 'alert-sell';
+                return `<div class="alert-item">
+                    <span>${dt}</span> -
+                    <span class="${cls}">${a.signal}</span> @
+                    <span>${a.price.toFixed(2)}</span> |
+                    Confidence: <span class="confidence-high">${(a.confidence*100).toFixed(1)}%</span>
+                </div>`;
+            }).join('');
+        }
+
+        // ---------- WebSocket for Real-Time Updates ----------
+        const ws = new WebSocket(`ws://${location.host}/ws`);
+
+        ws.onopen = () => {
+            statusEl.innerHTML = '✅ Connected to real-time stream';
+            statusEl.style.color = '#26a69a';
+            loadHistory();
+            loadAlerts();
+        };
+
+        ws.onerror = () => {
+            statusEl.innerHTML = '❌ Connection error';
+            statusEl.style.color = '#ef5350';
+        };
+
+        ws.onclose = () => {
+            statusEl.innerHTML = '⏸️ Disconnected, reconnecting in 3s...';
+            statusEl.style.color = '#d1d4dc';
+            setTimeout(() => location.reload(), 3000);
+        };
+
+        ws.onmessage = (event) => {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'candle') {
+                const c = msg.data;
+                candleSeries.update({
+                    time: c.time,
+                    open: c.open,
+                    high: c.high,
+                    low: c.low,
+                    close: c.close,
+                });
+            } else if (msg.type === 'alert') {
+                const a = msg.data;
+                // Prepend new alert to list
+                const dt = new Date(a.timestamp).toLocaleTimeString('en-US', { hour12: false });
+                const cls = a.signal === 'BUY' ? 'alert-buy' : 'alert-sell';
+                const newAlert = document.createElement('div');
+                newAlert.className = 'alert-item';
+                newAlert.innerHTML = `<span>${dt}</span> -
+                    <span class="${cls}">${a.signal}</span> @
+                    <span>${a.price.toFixed(2)}</span> |
+                    Confidence: <span class="confidence-high">${(a.confidence*100).toFixed(1)}%</span>`;
+                alertsListEl.prepend(newAlert);
+                // Keep max 30 items displayed
+                while (alertsListEl.children.length > 30) {
+                    alertsListEl.removeChild(alertsListEl.lastChild);
+                }
+            }
+        };
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            chart.applyOptions({ width: document.getElementById('chart-container').clientWidth });
+        });
+
+        // Initial load
+        loadAlerts();
+    </script>
+</body>
+</html>
